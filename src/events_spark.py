@@ -9,6 +9,9 @@ from decimal import Decimal
 from pyspark.sql.functions import substring, col, transform, concat,sequence, explode,monotonically_increasing_id
 import pandas as pd
 import datetime
+import os
+
+
 
 
 def create_dates_sequence(start_date, end_date,spark) -> DataFrame:
@@ -28,25 +31,25 @@ def create_dates_sequence(start_date, end_date,spark) -> DataFrame:
   dates_sequence= dates_sequence.withColumn("end_time", F.to_timestamp('end_time'))
   return dates_sequence
 
-def get_orb_site_machines(spark) -> DataFrame:
+def get_orb_site_machines(orbs_path, machines_path, spark) -> DataFrame:
   """Method to read the source orb_site_info
 
   Returns:
       DataFrame: orb_site_info 
   """
-  orb_site_info = spark.read.options(header='True').options(sep=',').options(infer_schema=True).csv("data/orb_site_info.csv")
+  orb_site_info = spark.read.options(header='True').options(sep=',').options(infer_schema=True).csv(orbs_path)
   orb_site_info = orb_site_info.withColumnRenamed('orb_site','meta_orb_site')
-  machines= spark.read.options(header='True').options(sep=',').options(infer_schema=True).csv("data/orb_site_machines.csv")
+  machines= spark.read.options(header='True').options(sep=',').options(infer_schema=True).csv(machines_path)
   orb_site_machines = orb_site_info.join(machines, ["meta_orb_site"])
   return orb_site_machines
   
-def get_sorting_states(spark) -> DataFrame:
+def get_sorting_states(path, spark) -> DataFrame:
   """Method to read the source sorting_states
 
     Returns:
         DataFrame: operating_seconds,downtime_seconds,blocked_seconds
   """
-  sorting_states = spark.read.options(header='True').options(sep=',').options(infer_schema=True).csv("data/sorting_states.csv")
+  sorting_states = spark.read.options(header='True').options(sep=',').options(infer_schema=True).csv(path)
 
   sorting_states = sorting_states.withColumn('start_time_datetime', F.to_timestamp(sorting_states['start_time']*1))
   sorting_states = sorting_states.withColumn('end_time_datetime', F.to_timestamp(sorting_states['end_time']*1))
@@ -86,13 +89,13 @@ def get_sorting_states(spark) -> DataFrame:
   blocked_seconds = sorting_states_seconds.filter("state == 'blocked'").groupBy("meta_orb_site","meta_machine_name","date_hour").agg(F.sum(sorting_states_seconds.seconds).alias("blocked_seconds"))
   return operating_seconds, downtime_seconds,blocked_seconds
   
-def get_sort_attempts(spark) -> DataFrame:
+def get_sort_attempts(path, spark) -> DataFrame:
   """Method to read the source sort_attempts
 
     Returns:
         DataFrame: sort_attempts_count, sort_attempts_complete_count
   """
-  sort_attempts=spark.read.options(header='True').options(sep=',').options(infer_schema=True).csv("data/sort_attempts.csv")
+  sort_attempts=spark.read.options(header='True').options(sep=',').options(infer_schema=True).csv(path)
   sort_attempts = sort_attempts.withColumn('start_time_datetime', F.to_timestamp(sort_attempts['start_time']*1))
   sort_attempts = sort_attempts.withColumn('end_time_datetime', F.to_timestamp(sort_attempts['end_time']*1))
 
@@ -102,15 +105,15 @@ def get_sort_attempts(spark) -> DataFrame:
   sort_attempts_complete_count= sort_attempts.filter("outcome == 'complete'").groupBy("meta_orb_site","meta_machine_name","date_hour").agg(F.count(sort_attempts.id).alias("complete_attempts"))
   return sort_attempts_count, sort_attempts_complete_count
 
-def get_unloads(spark) -> DataFrame:
+def get_unloads(unloads_path, unload_items_path, spark) -> DataFrame:
   """Method to read the source unloads and unload_items
 
   Returns:
       DataFrame: unload_items_count
   """
 
-  unloads= spark.read.options(header='True').options(sep=',').options(infer_schema=True).csv("data/unloads.csv")
-  unloads_items= spark.read.options(header='True').options(sep=',').options(infer_schema=True).csv("data/unload_items.csv")
+  unloads= spark.read.options(header='True').options(sep=',').options(infer_schema=True).csv(unloads_path)
+  unloads_items= spark.read.options(header='True').options(sep=',').options(infer_schema=True).csv(unload_items_path)
 
   unloads = unloads.withColumn('event_time_datetime', F.to_timestamp(unloads['event_time']*1))
 
@@ -147,13 +150,22 @@ def process_hourly_sorting_aggregate(dates_sequence,operating_seconds,blocked_se
 
 def main(spark):
 
-  dates_sequence= create_dates_sequence('2022-11-01','2023-03-31', spark)
-  orb_site_machines = get_orb_site_machines(spark)
+  start_date_sequence= os.getenv("START_DATE_SEQUENCE")
+  end_date_sequence= os.getenv("END_DATE_SEQUENCE")
+  sorting_states_path= os.getenv("SORTING_STATES_PATH")
+  sorting_attempts_path= os.getenv("SORTING_ATTEMPTS_PATH")
+  unload_path= os.getenv("UNLOADS_PATH")
+  unload_items_path = os.getenv("UNLOADS_ITEMS_PATH")
+  orbs_path = os.getenv("ORBS_PATH") 
+  machine_path= os.getenv("MACHINES_PATH")
+
+  dates_sequence= create_dates_sequence(start_date_sequence,end_date_sequence, spark)
+  orb_site_machines = get_orb_site_machines(orbs_path, machine_path, spark)
 
   dates_sequence = dates_sequence.crossJoin(orb_site_machines)
-  operating_seconds, blocked_seconds, downtime_seconds = get_sorting_states(spark)
-  sort_attempts_count, sort_attempts_complete_count = get_sort_attempts(spark)
-  unload_items_count = get_unloads(spark)
+  operating_seconds, blocked_seconds, downtime_seconds = get_sorting_states(sorting_states_path, spark)
+  sort_attempts_count, sort_attempts_complete_count = get_sort_attempts(sorting_attempts_path,spark)
+  unload_items_count = get_unloads(unload_path, unload_items_path, spark)
   hourly_sorting_aggregate = process_hourly_sorting_aggregate(dates_sequence,operating_seconds,blocked_seconds,downtime_seconds,sort_attempts_count,sort_attempts_complete_count,unload_items_count,spark)
 
   #Showing Machine M1 and orb_site Las Vegas

@@ -7,6 +7,7 @@ name = "pypi"
 pandas = "*"
 pytest = "*"
 pytest-spark = "*"
+python-dotenv = "*"
 
 [dev-packages]
 
